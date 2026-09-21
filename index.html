@@ -394,6 +394,49 @@ body.locked{overflow:hidden;height:100%}
     transition:opacity 1.6s var(--ease), transform 1.6s var(--ease), filter 1.6s var(--ease)}
 .rv.in{opacity:1; transform:none; filter:blur(0)}
 
+/* ===================================================================
+   МУЗЫКА: маленькая кнопка в углу
+   =================================================================== */
+.music{
+  position:fixed; z-index:70;
+  top:calc(env(safe-area-inset-top,0px) + 14px);
+  right:calc(env(safe-area-inset-right,0px) + 14px);
+  width:44px; height:44px; padding:0; margin:0;
+  display:flex; align-items:center; justify-content:center;
+  border-radius:50%;
+  border:1px solid rgba(238,242,248,.14);
+  background:rgba(4,6,13,.42);
+  -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+  color:rgba(238,242,248,.5);
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+  -webkit-appearance:none; appearance:none;
+  opacity:0; visibility:hidden; pointer-events:none;
+  transition:opacity 2s var(--ease) 1s, visibility 2s 1s, color 1.8s ease, border-color 1.8s ease;
+}
+.music.show{opacity:1; visibility:visible; pointer-events:auto}
+.music.playing{color:var(--accent); border-color:var(--accent-dim)}
+.music:focus-visible{outline:1px solid var(--accent); outline-offset:3px}
+
+.eq{display:flex; align-items:flex-end; gap:3px; height:16px}
+.eq i{
+  display:block; width:2px; height:16px; border-radius:1px;
+  background:currentColor;
+  transform:scaleY(.28); transform-origin:50% 100%;
+  transition:transform .5s var(--ease);
+}
+.music.playing .eq i{animation:eq 1.15s ease-in-out infinite}
+.music.playing .eq i:nth-child(2){animation-delay:-.4s}
+.music.playing .eq i:nth-child(3){animation-delay:-.8s}
+@keyframes eq{0%,100%{transform:scaleY(.28)} 50%{transform:scaleY(1)}}
+
+/* Если iPhone не дал включить звук сам — кнопка мягко «пульсирует» */
+.music.nudge{animation:nudge 2.6s ease-in-out infinite}
+@keyframes nudge{
+  0%,100%{box-shadow:0 0 0 0 var(--accent-dim)}
+  50%{box-shadow:0 0 0 10px rgba(0,0,0,0)}
+}
+
 @media (max-width:560px){
   .chapter{padding:9vh 20px 11vh}
   .chapter-head{margin-bottom:3.4rem; font-size:.55rem; letter-spacing:.24em; gap:11px}
@@ -577,6 +620,14 @@ body.locked{overflow:hidden;height:100%}
 </main>
 
 <div class="progress" id="prog"></div>
+
+<!-- ============================ МУЗЫКА ============================
+     Файл песни должен лежать рядом с index.html и называться song.mp3
+     (если назовёшь по-другому — поменяй имя в src ниже). -->
+<audio id="song" src="song.mp3" preload="auto" loop playsinline></audio>
+<button id="music" class="music" type="button" aria-label="Включить музыку" aria-pressed="false">
+  <span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>
+</button>
 
 <script>
 /* ===================================================================
@@ -824,6 +875,106 @@ body.locked{overflow:hidden;height:100%}
 
 
 /* ===================================================================
+   1б. МУЗЫКА
+   iPhone запрещает включать звук «сам по себе». Поэтому:
+   - при самом первом касании экрана (например, когда нажимаешь на поле
+     ввода даты) мы тихо «разблокируем» плеер;
+   - после верной даты музыка стартует сама;
+   - если вдруг не стартовала — появится пульсирующая кнопка, тапни её.
+   =================================================================== */
+(function(){
+  const audio = document.getElementById('song');
+  const btn   = document.getElementById('music');
+  if(!audio || !btn) return;
+
+  let wantPlay = false;      // история уже открыта, музыка должна играть
+  let unlocked = false;
+  let resumeOnShow = false;
+  let fadeTimer = null;
+
+  function setUI(on){
+    btn.classList.toggle('playing', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.setAttribute('aria-label', on ? 'Выключить музыку' : 'Включить музыку');
+  }
+
+  // Разблокировка при первом касании (беззвучно, сразу пауза)
+  const EVENTS = ['touchend','click','keydown'];
+  function unlock(){
+    if(unlocked) return;
+    unlocked = true;
+    EVENTS.forEach(ev => document.removeEventListener(ev, unlock, true));
+    audio.muted = true;
+    const p = audio.play();
+    const done = () => {
+      audio.muted = false;
+      if(!wantPlay){ audio.pause(); try{ audio.currentTime = 0; }catch(e){} }
+    };
+    if(p && p.then) p.then(done).catch(() => { audio.muted = false; unlocked = false; });
+    else done();
+  }
+  EVENTS.forEach(ev => document.addEventListener(ev, unlock, true));
+
+  // Плавное появление звука (на iPhone громкость программно не меняется — там просто сразу)
+  function fadeIn(){
+    clearInterval(fadeTimer);
+    try{
+      audio.volume = 0;
+      let v = 0;
+      fadeTimer = setInterval(() => {
+        v = Math.min(1, v + 0.05);
+        audio.volume = v;
+        if(v >= 1) clearInterval(fadeTimer);
+      }, 120);
+    }catch(e){}
+  }
+
+  function play(){
+    audio.muted = false;
+    const p = audio.play();
+    if(p && p.then){
+      p.then(() => { btn.classList.remove('nudge'); fadeIn(); })
+       .catch(() => { setUI(false); btn.classList.add('nudge'); });
+    }
+  }
+
+  audio.addEventListener('play',  () => { if(wantPlay) setUI(true);  });
+  audio.addEventListener('pause', () => { if(wantPlay) setUI(false); });
+
+  // Нет файла — прячем кнопку, чтобы не было «мёртвой» кнопки
+  audio.addEventListener('error', () => { btn.style.display = 'none'; });
+
+  btn.addEventListener('click', () => {
+    btn.classList.remove('nudge');
+    wantPlay = true;
+    if(audio.paused){ play(); }
+    else { resumeOnShow = false; audio.pause(); }
+  });
+
+  // Свернули Safari / заблокировали экран — пауза; вернулись — продолжаем
+  document.addEventListener('visibilitychange', () => {
+    if(!wantPlay) return;
+    if(document.hidden){
+      resumeOnShow = !audio.paused;
+      audio.pause();
+    } else if(resumeOnShow){
+      resumeOnShow = false;
+      play();
+    }
+  });
+
+  // Вызывается после верной даты
+  window.MUSIC = {
+    start(){
+      wantPlay = true;
+      btn.classList.add('show');
+      play();
+    }
+  };
+})();
+
+
+/* ===================================================================
    2. ВХОД ПО ДАТЕ
    =================================================================== */
 (function(){
@@ -888,6 +1039,7 @@ body.locked{overflow:hidden;height:100%}
   function open(){
     gate.classList.add('gone');
     window.SKY.burst(120);            // небо «вспыхивает» звездопадом
+    if(window.MUSIC) window.MUSIC.start();   // и начинает играть музыка
     setTimeout(()=>{
       document.body.classList.remove('locked');
       window.scrollTo(0,0);
